@@ -1,0 +1,21 @@
+/bin
+/tmp
+/vendor
+.env
+.DS_Store
+.idea/
+.vscode/
+
+# Node
+node_modules/
+public/build/
+public/hot
+
+# Database
+database/*.sqlite
+database/*.sqlite-shm
+database/*.sqlite-wal
+!database/.gitignore
+
+# Docs
+docs/sprint/
