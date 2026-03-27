@@ -11,6 +11,24 @@ import (
 	"golang.org/x/text/language"
 )
 
+// isPathSafe validates that the resolved absolute path is within the allowed root.
+// This prevents directory traversal attacks (e.g. ../../etc/passwd).
+func isPathSafe(root, target string) bool {
+	clean := filepath.Clean(target)
+	return strings.HasPrefix(clean, filepath.Clean(root)+string(os.PathSeparator)) ||
+		clean == filepath.Clean(root)
+}
+
+// getDocsRoot returns the configured documentation root directory.
+func getDocsRoot() string {
+	root := os.Getenv("DOCS_PATH")
+	if root == "" {
+		cwd, _ := os.Getwd()
+		root = filepath.Join(cwd, "docs")
+	}
+	return root
+}
+
 // DocsView renders the documentation page
 func DocsView(c *fiber.Ctx) error {
 	path := c.Params("*")
@@ -21,21 +39,13 @@ func DocsView(c *fiber.Ctx) error {
 		path = "INDEX" // Default page
 	}
 
-	// 1. Sanitize Path (Prevent Directory Traversal)
-	// Allow alphanumeric, underscores, hyphens, and slashes for subdirectories
-	// But strictly prevent '..'
+	// 1. Sanitize Path using safe prefix check
 	if strings.Contains(path, "..") {
 		return c.Status(400).SendString("Invalid path")
 	}
 
-	// 2. Construct absolute path to docs/
-	// Check for DOCS_PATH environment variable
-	docsRoot := os.Getenv("DOCS_PATH")
-	if docsRoot == "" {
-		// Fallback to local ./docs directory
-		cwd, _ := os.Getwd()
-		docsRoot = filepath.Join(cwd, "docs")
-	}
+	// 2. Resolve docs root
+	docsRoot := getDocsRoot()
 
 	// Determine if path has an explicit extension
 	hasExplicitExt := strings.HasSuffix(path, ".md") || strings.HasSuffix(path, ".html")
@@ -134,17 +144,13 @@ func SaveDoc(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Path is required"})
 	}
 
-	// 1. Sanitize Path (Prevent Directory Traversal)
+	// 1. Sanitize Path
 	if strings.Contains(req.Path, "..") {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid path"})
 	}
 
-	// 2. Construct absolute path to docs/
-	docsRoot := os.Getenv("DOCS_PATH")
-	if docsRoot == "" {
-		cwd, _ := os.Getwd()
-		docsRoot = filepath.Join(cwd, "docs")
-	}
+	// 2. Resolve docs root
+	docsRoot := getDocsRoot()
 
 	ext := req.Extension
 	if ext == "" {
@@ -152,6 +158,11 @@ func SaveDoc(c *fiber.Ctx) error {
 	}
 
 	docPath := filepath.Join(docsRoot, req.Path+ext)
+
+	// Extra safety: verify resolved path is inside docsRoot
+	if !isPathSafe(docsRoot, docPath) {
+		return c.Status(400).JSON(fiber.Map{"error": "Access denied"})
+	}
 
 	// 3. Check if file exists (or at least the directory exists)
 	// We want to allow creating new files or editing existing ones
@@ -187,13 +198,14 @@ type DocItem struct {
 
 // GetDocsNavigation returns a JSON structure of the docs directory
 func GetDocsNavigation(c *fiber.Ctx) error {
-	docsRoot := os.Getenv("DOCS_PATH")
-	if docsRoot == "" {
-		cwd, _ := os.Getwd()
-		docsRoot = filepath.Join(cwd, "docs")
-	}
+	docsRoot := getDocsRoot()
 
 	allDocs := make([]DocItem, 0)
+
+	// If root doesn't exist, return empty list gracefully
+	if _, err := os.Stat(docsRoot); os.IsNotExist(err) {
+		return c.JSON(fiber.Map{"success": true, "data": allDocs})
+	}
 
 	err := filepath.Walk(docsRoot, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -285,11 +297,8 @@ func CreateFolder(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Folder name is required"})
 	}
 
-	docsRoot := os.Getenv("DOCS_PATH")
-	if docsRoot == "" {
-		cwd, _ := os.Getwd()
-		docsRoot = filepath.Join(cwd, "docs")
-	}
+	// 2. Resolve docs root
+	docsRoot := getDocsRoot()
 
 	// Sanitize folder name
 	cleanName := strings.ReplaceAll(req.FolderName, "/", "")
@@ -333,11 +342,7 @@ func CreateFile(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "File name is required"})
 	}
 
-	docsRoot := os.Getenv("DOCS_PATH")
-	if docsRoot == "" {
-		cwd, _ := os.Getwd()
-		docsRoot = filepath.Join(cwd, "docs")
-	}
+	docsRoot := getDocsRoot()
 
 	// Sanitize file name
 	cleanName := strings.ReplaceAll(req.FileName, "/", "")
@@ -354,6 +359,11 @@ func CreateFile(c *fiber.Ctx) error {
 	}
 
 	filePath := filepath.Join(docsRoot, req.FolderPath, cleanName)
+
+	// Extra safety: verify resolved path is inside docsRoot
+	if !isPathSafe(docsRoot, filePath) {
+		return c.Status(400).JSON(fiber.Map{"error": "Access denied"})
+	}
 
 	// Check if already exists
 	if _, err := os.Stat(filePath); err == nil {
